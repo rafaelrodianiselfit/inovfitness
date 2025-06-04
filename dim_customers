@@ -1,0 +1,75 @@
+/* ───────── Parâmetro de corte: ontem (00:00) ───────── */
+DECLARE @Ontem date = CAST(GETDATE() - 1 AS date);
+
+/* ───────── 1) Filtra contratos e grava em #Contratos ───────── */
+IF OBJECT_ID('tempdb..#Contratos') IS NOT NULL DROP TABLE #Contratos;
+
+SELECT  ID_CLIENTE,
+        ID_FILIAL,
+        ID_CLIENTE_CONTRATO
+INTO    #Contratos               -- apenas colunas que usaremos depois
+FROM    CLIENTES_CONTRATOS
+WHERE   INICIO <= @Ontem
+  AND  (FIM             IS NULL OR FIM             >= @Ontem)
+  AND  (DT_CANCELAMENTO IS NULL OR DT_CANCELAMENTO >= @Ontem)
+  AND   TIPO_CONTRATO = 5;
+
+-- Índice clustered torna os próximos JOINs bem rápidos
+CREATE CLUSTERED INDEX IX_Contratos_ID_CLIENTE ON #Contratos (ID_CLIENTE);
+
+/* ───────── 2) Agrega interesses só dos clientes filtrados ───────── */
+IF OBJECT_ID('tempdb..#Interesses') IS NOT NULL DROP TABLE #Interesses;
+
+SELECT  CI.ID_CLIENTE,
+        STRING_AGG(PSI.NOME, ', ') AS FITNESS_GOAL
+INTO    #Interesses
+FROM    CLIENTES_INTERESSES           CI
+JOIN    #Contratos                    CT ON CT.ID_CLIENTE = CI.ID_CLIENTE
+JOIN    PROSPECTS_SERVICOS_INTERESSES PSI
+        ON PSI.ID_INTERESSE = CI.ID_INTERESSE
+GROUP BY CI.ID_CLIENTE;
+
+CREATE INDEX IX_Int_ID_CLIENTE ON #Interesses(ID_CLIENTE);
+
+/* ───────── 3) SELECT final usando apenas as amostras ───────── */
+SELECT
+    CT.ID_CLIENTE                      AS ID_CLIENT,
+    NULL                               AS CUSTOMER_ID,
+    C.ID_FUNCIONARIO_RESPONSAVEL_PROFESSOR AS ID_CUST_PERS,
+    CT.ID_CLIENTE_CONTRATO             AS CUSTOMER_CODE,
+    CONCAT(C.NOME,' ',C.SNOME)         AS NAME,
+    C.NOME                             AS SHORT_NAME,
+    C.DT_NASCIMENTO                    AS BIRTHDATE,
+    C.SEXO                             AS GENDER,
+    C.ESTADO_CIVIL                     AS MARITAL_STATUS,
+    C.NACIONALIDADE                    AS NATIONALITY,
+    C.PROFISSAO                        AS PROFESSION,
+    I.FITNESS_GOAL                     AS FITNESS_GOAL,
+    NULL                               AS FITNESS_LEVEL,
+    NULL                               AS TIN,
+    C.CEP                              AS POSTAL_CODE,
+    P.NOME                             AS COUNTRY,
+    Email.DESCRICAO                    AS EMAIL,
+    NULL                               AS EMAIL_ALTERNATIVE,
+    Fone.DESCRICAO                     AS PHONE_NUMBER,
+    FoneAlt.DESCRICAO                  AS PHONE_NUMBER_ALTERNATIVE,
+    'Ativo'                            AS STATUS,
+    'Member'                           AS TYPE,
+    CAST(1 AS bit)                     AS [FLG ACTIVE],
+    NULL                               AS [FLG AF REFUSAL],
+    CT.ID_FILIAL                       AS ID_CLUB,
+    NULL                               AS ID_EMP,
+    NULL                               AS ID_MEMBER_REFERRED,
+    NULL                               AS FLG_DELETED,
+    NULL                               AS [MARKETING SOURCE],
+    C.DT_CADASTRO                       AS CREATED_AT,
+    C.DT_ALTERACAO                     AS LAST_MODIFIED_AT,
+    GETDATE()                          AS VERSION
+FROM   #Contratos              CT
+JOIN   CLIENTES                C   ON C.ID_CLIENTE = CT.ID_CLIENTE
+LEFT  JOIN PAIS                P   ON P.ID_PAIS    = C.ID_PAIS
+LEFT  JOIN #Interesses         I   ON I.ID_CLIENTE = CT.ID_CLIENTE
+OUTER APPLY (SELECT TOP 1 DESCRICAO FROM TELEFONES WHERE ID_CLIENTE = CT.ID_CLIENTE AND TIPO_CONTATO = 4) Email
+OUTER APPLY (SELECT TOP 1 DESCRICAO FROM TELEFONES WHERE ID_CLIENTE = CT.ID_CLIENTE AND TIPO_CONTATO = 1) Fone
+OUTER APPLY (SELECT TOP 1 DESCRICAO FROM TELEFONES WHERE ID_CLIENTE = CT.ID_CLIENTE AND TIPO_CONTATO = 2) FoneAlt
+OPTION (RECOMPILE);   -- plano otimizado a cada execução
